@@ -2,7 +2,6 @@ import pandas as pd
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-
 REQUIRED_COLUMNS = ['Task Name', 'Start Date', 'Due Date', 'Assignee', 'Linked Entity']
 
 def load_schedule(csv_file):
@@ -33,40 +32,45 @@ def get_weekly_task_groups(df, internship_start_date, exclude_weekends=True, lea
     if isinstance(internship_start_date, pd.Timestamp):
         internship_start_date = internship_start_date.date()
 
-    # Set current to start of first full week
+    # Start at beginning of the week
     current = internship_start_date - timedelta(days=internship_start_date.weekday())
-
-    # Set end date to last due date as date
-    overall_end = df['Due Date'].max().date()
+    end = df['Due Date'].max().date()
 
     weeks = {}
 
-    while current <= overall_end:
+    while current <= end:
         week_start = current
         week_end = week_start + timedelta(days=6)
 
-        # Use .dt.date to make compatible comparisons
         mask = (df['Start Date'].dt.date <= week_end) & (df['Due Date'].dt.date >= week_start)
         week_df = df[mask]
 
         tasks = defaultdict(list)
         for _, row in week_df.iterrows():
-            start = max(row['Start Date'].date(), week_start)
+            task_start = max(row['Start Date'].date(), week_start)
             task_end = min(row['Due Date'].date(), week_end)
-            for i in range((task_end - start).days + 1):
-                day = start + timedelta(days=i)
-                if (exclude_weekends and day.weekday() >= 5):
+            for i in range((task_end - task_start).days + 1):
+                day = task_start + timedelta(days=i)
+                if exclude_weekends and day.weekday() >= 5:
                     continue
                 if day in leave_dates:
                     continue
                 task_text = f"{row['Task Name']} ({row['Linked Entity']})" if pd.notna(row['Linked Entity']) else row['Task Name']
                 tasks[day].append(task_text)
 
+        # Always include all weekdays for the week, even if no tasks
+        full_week = {}
+        for i in range(5):
+            day = week_start + timedelta(days=i)
+            if exclude_weekends and day.weekday() >= 5:
+                continue
+            if day in leave_dates:
+                continue
+            full_week[day] = tasks.get(day, [])
+
         label = f"{week_start.strftime('%Y-%m-%d')} to {week_end.strftime('%Y-%m-%d')}"
-        full_week = {week_start + timedelta(days=i): tasks.get(week_start + timedelta(days=i), []) for i in range(5)}
         weeks[label] = full_week
 
         current += timedelta(days=7)
 
     return weeks
-

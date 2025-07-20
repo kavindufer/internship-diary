@@ -43,14 +43,13 @@ if csv_file:
 
         if start_date_input:
             weekly_tasks = get_weekly_task_groups(df, start_date_input, exclude_weekends=True, leave_dates=leave_dates)
-            week_labels = list(weekly_tasks.keys())
+            week_labels = sorted(list(weekly_tasks.keys()))
             selected_week = st.selectbox("Select a week to view tasks", week_labels)
 
             if selected_week:
                 tasks = weekly_tasks[selected_week]
                 st.markdown(f"### 📋 Tasks for {selected_week}")
 
-                # Create full week (Mon–Fri)
                 week_start = datetime.strptime(selected_week.split(" to ")[0], "%Y-%m-%d").date()
                 for i in range(5):  # Weekdays only
                     day = week_start + timedelta(days=i)
@@ -61,7 +60,7 @@ if csv_file:
                         st.warning(f"🛌 Leave taken — {reason}")
                         if not tasks.get(day):
                             st.info("_No tasks on this day (on leave)_")
-                    elif day not in tasks:
+                    elif day not in tasks or not tasks[day]:
                         st.write("_No tasks_")
                     else:
                         for task in tasks[day]:
