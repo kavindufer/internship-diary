@@ -4,6 +4,7 @@ import os
 import streamlit as st
 import pandas as pd
 import json
+import hashlib
 from datetime import datetime, timedelta
 from utils.csv_parser import load_schedule, get_weekly_task_groups
 from utils.openai_helper import (
@@ -53,7 +54,6 @@ def save_task_json():
 
 def update_task_history(task_json, task_name, new_full_desc, start_date, end_date):
     entry = task_json.setdefault(task_name, {"history": [], "daywise_descriptions": {}})
-    # Only add new if it's a new description or new range
     found = False
     for seg in entry["history"]:
         if seg["description"] == new_full_desc and seg["start"] == start_date and seg["end"] == end_date:
@@ -111,7 +111,6 @@ if csv_file:
                 week_ending = (week_start + timedelta(days=6)).strftime('%Y-%m-%d')
                 days_of_week = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
 
-                # Build mapping: {task_name: [dates]}
                 unique_tasks = {}
                 for i in range(7):
                     day = week_start + timedelta(days=i)
@@ -137,6 +136,7 @@ if csv_file:
 
                 if idx < len(task_list):
                     current_task = task_list[idx]
+                    current_task_key = hashlib.md5(f"{current_task}_{selected_week}".encode()).hexdigest()
                     if current_task not in questions:
                         with st.spinner("AI is thinking..."):
                             q = get_task_question(current_task, OPENAI_API_KEY)
@@ -144,26 +144,30 @@ if csv_file:
                         st.session_state['chat_questions'] = questions
 
                     st.markdown(f"**AI:** {questions[current_task]}")
-                    user_answer = st.text_area("Your answer:", key=f"answer_{current_task[:16]}")
+                    user_answer = st.text_area(
+                        "Your answer:",
+                        key=f"answer_{current_task_key}"
+                    )
                     if user_answer:
                         refined_answer = refine_task_description(user_answer, OPENAI_API_KEY)
                         st.info("**AI-refined:** " + refined_answer)
-                        if st.button("Use this answer and continue"):
+                        if st.button("Use this answer and continue", key=f"use_{current_task_key}"):
                             answers[current_task] = refined_answer
                             st.session_state['chat_answers'] = answers
                             st.session_state['chat_current'] += 1
                             st.rerun()
-                        if st.button("Edit again"):
-                            pass  # Stay on this task for further editing
+                        if st.button("Edit again", key=f"edit_{current_task_key}"):
+                            pass
                 else:
                     st.success("All tasks answered! Review below and make any edits you like:")
                     for task in task_list:
+                        unique_task_key = hashlib.md5(f"{task}_{selected_week}".encode()).hexdigest()
                         new_answer = st.text_area(
                             f"Edit entry for {task}:",
                             value=answers.get(task, ""),
-                            key=f"review_{task[:16]}"
+                            key=f"review_{unique_task_key}"
                         )
-                        if st.button(f"Refine {task}"):
+                        if st.button(f"Refine {task}", key=f"refine_{unique_task_key}"):
                             new_answer = refine_task_description(new_answer, OPENAI_API_KEY)
                         st.session_state['chat_answers'][task] = new_answer
 
@@ -196,7 +200,6 @@ if csv_file:
                     for task in task_list:
                         all_days = sorted(set(task_json.get(task, {}).get("daywise_descriptions", {}).keys()))
                         week_days = unique_tasks[task]
-                        # Find which week_days are new and which are already filled
                         new_days = [d for d in week_days if d not in all_days]
                         done_days = [d for d in week_days if d in all_days]
 
@@ -245,7 +248,6 @@ if csv_file:
                             if d in leave_dates:
                                 desc = f"Leave taken — {leave_data.get(d, 'No reason provided')}"
                             else:
-                                # For each task on this day, use the correct partial (history aware)
                                 day_tasks = tasks.get(d, [])
                                 parts = []
                                 for task in day_tasks:
