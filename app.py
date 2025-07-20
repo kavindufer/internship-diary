@@ -3,49 +3,61 @@ load_dotenv()
 import os
 import streamlit as st
 import pandas as pd
+import json
 from datetime import datetime, timedelta
 from utils.csv_parser import load_schedule, get_weekly_task_groups
-from utils.openai_helper import get_task_question, get_notes_summary
+from utils.openai_helper import get_task_question, get_notes_summary, refine_task_description, get_daywise_partials
 from utils.docx_handler import fill_report_template
 
 st.set_page_config(page_title="Internship Diary Automator", layout="centered")
-
 st.title("📅 Internship Diary Automator")
 st.write("Start by uploading your task schedule to generate weekly reports.")
 
-# Get OpenAI API key from environment variable
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     st.error("OpenAI API key not found in environment variable OPENAI_API_KEY.")
     st.stop()
 
-# --- Extra Info: Training Mode, Designation, Signature PNG
+# --- Sidebar: Ask for all info up front ---
 st.sidebar.header("Report Setup")
 training_mode = st.sidebar.selectbox(
     "Select Training Mode", ["Online", "Physical", "Hybrid"]
 )
-designation = st.sidebar.text_input("Your Designation")
-signature_file = st.sidebar.file_uploader("Upload your signature (PNG)", type=["png"])
-signature_path = None
-if signature_file:
-    signature_path = f"temp_signature_{signature_file.name}"
-    with open(signature_path, "wb") as f:
-        f.write(signature_file.getbuffer())
+your_signature_file = st.sidebar.file_uploader("Your signature (PNG)", type=["png"], key="your_sig")
+supervisor_designation = st.sidebar.text_input("Supervisor Designation")
+supervisor_signature_file = st.sidebar.file_uploader("Supervisor signature (PNG)", type=["png"], key="sup_sig")
+
+your_signature_path, supervisor_signature_path = None, None
+if your_signature_file:
+    your_signature_path = f"temp_yoursig_{your_signature_file.name}"
+    with open(your_signature_path, "wb") as f:
+        f.write(your_signature_file.getbuffer())
+if supervisor_signature_file:
+    supervisor_signature_path = f"temp_supsig_{supervisor_signature_file.name}"
+    with open(supervisor_signature_path, "wb") as f:
+        f.write(supervisor_signature_file.getbuffer())
 
 csv_file = st.file_uploader("📄 Upload Task Schedule CSV", type=["csv"])
 
-def task_assigned_on_day(task, day, tasks_by_day):
-    return day in tasks_by_day and task in tasks_by_day[day]
+# --- Task JSON for multi-week, multi-day tracking ---
+task_json_path = "task_descriptions.json"
+if os.path.exists(task_json_path):
+    with open(task_json_path, "r") as f:
+        task_json = json.load(f)
+else:
+    task_json = {}
+
+def save_task_json():
+    with open(task_json_path, "w") as f:
+        json.dump(task_json, f, indent=2)
 
 if csv_file:
     try:
         df = load_schedule(csv_file)
         st.success("✅ CSV successfully parsed!")
-
         st.subheader("🔍 Task Preview")
         st.dataframe(df.head(10), use_container_width=True)
         st.info(f"📅 Earliest Task: {df['Start Date'].min().date()} — Latest Task: {df['Due Date'].max().date()}")
-
         st.subheader("📅 Internship Start Date")
         csv_earliest_start = df['Start Date'].min().date()
         start_date_input = st.date_input("When did your internship start?", value=csv_earliest_start)
@@ -83,18 +95,18 @@ if csv_file:
                 week_start = datetime.strptime(selected_week.split(" to ")[0], "%Y-%m-%d").date()
                 days_of_week = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
 
-                unique_tasks = set()
+                # Build mapping of {task_name: [dates it covers this week]}
+                unique_tasks = {}
                 for i in range(7):
                     day = week_start + timedelta(days=i)
                     if day in leave_dates:
                         continue
-                    day_tasks = tasks.get(day, [])
-                    for task in day_tasks:
-                        unique_tasks.add(task)
+                    for task in tasks.get(day, []):
+                        unique_tasks.setdefault(task, []).append(day.strftime('%Y-%m-%d'))
 
-                # --- CHAT Q&A SECTION ---
+                # --- CHAT Q&A: with AI-refined answer per task
                 if 'chat_task_list' not in st.session_state or st.session_state.get('chat_week') != selected_week:
-                    st.session_state['chat_task_list'] = sorted(list(unique_tasks))
+                    st.session_state['chat_task_list'] = list(unique_tasks.keys())
                     st.session_state['chat_current'] = 0
                     st.session_state['chat_answers'] = {}
                     st.session_state['chat_questions'] = {}
@@ -121,7 +133,8 @@ if csv_file:
                     col_next, col_skip = st.columns([3, 1])
                     with col_next:
                         if st.button("Next"):
-                            answers[current_task] = user_answer
+                            fixed_answer = refine_task_description(user_answer, OPENAI_API_KEY)
+                            answers[current_task] = fixed_answer
                             st.session_state['chat_answers'] = answers
                             st.session_state['chat_current'] += 1
                             st.rerun()
@@ -129,7 +142,6 @@ if csv_file:
                         if st.button("Skip"):
                             st.session_state['chat_current'] += 1
                             st.rerun()
-
                 else:
                     st.success("All tasks answered! Review below and make any edits you like:")
                     for task in task_list:
@@ -138,7 +150,25 @@ if csv_file:
                             value=answers.get(task, ""),
                             key=f"review_{task[:16]}"
                         )
+                        if st.button(f"Refine {task}"):
+                            new_answer = refine_task_description(new_answer, OPENAI_API_KEY)
                         st.session_state['chat_answers'][task] = new_answer
+
+                    # --- Save to task_json and split for daywise partials ---
+                    for task, days in unique_tasks.items():
+                        full_desc = st.session_state['chat_answers'].get(task, "")
+                        if not full_desc:
+                            continue
+                        task_entry = task_json.setdefault(task, {"full_description": "", "refined": "", "daywise_descriptions": {}})
+                        task_entry["full_description"] = full_desc
+                        # Only generate daywise if not already done
+                        missing_days = [d for d in days if d not in task_entry["daywise_descriptions"]]
+                        if missing_days:
+                            new_partials = get_daywise_partials(task, full_desc, days, OPENAI_API_KEY)
+                            for d in missing_days:
+                                task_entry["daywise_descriptions"][d] = new_partials[d]
+                        task_json[task] = task_entry
+                    save_task_json()
 
                     # --- Auto-Summarize Details/Notes ---
                     if "auto_details_notes" not in st.session_state or st.session_state.get('auto_notes_week') != selected_week:
@@ -177,12 +207,15 @@ if csv_file:
                             if d in leave_dates:
                                 desc = f"Leave taken — {leave_data.get(d, 'No reason provided')}"
                             else:
+                                # For each task scheduled that day, use the split from task_json if available
                                 day_tasks = tasks.get(d, [])
-                                if day_tasks:
-                                    desc = "\n\n".join([
-                                        f"{task}:\n{st.session_state['chat_answers'].get(task, '')}"
-                                        for task in day_tasks
-                                    ])
+                                parts = []
+                                for task in day_tasks:
+                                    partials = task_json.get(task, {}).get("daywise_descriptions", {})
+                                    day_desc = partials.get(date_str)
+                                    if day_desc:
+                                        parts.append(f"{task}:\n{day_desc}")
+                                desc = "\n\n".join(parts)
                             daily_entries[day_name] = {"date": date_str, "desc": desc}
 
                         fill_report_template(
@@ -192,13 +225,13 @@ if csv_file:
                             training_mode=training_mode,
                             daily_entries=daily_entries,
                             details_notes=details_notes,
-                            designation=designation,
-                            signature_path=signature_path
+                            your_signature_path=your_signature_path,
+                            supervisor_signature_path=supervisor_signature_path,
+                            supervisor_designation=supervisor_designation
                         )
                         with open(output_path, "rb") as f:
                             st.success("Your weekly report is ready!")
                             st.download_button("Download Report", f, file_name=output_filename)
-
         else:
             st.warning("⚠️ No weeks found in your task data range.")
 
