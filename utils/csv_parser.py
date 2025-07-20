@@ -1,40 +1,72 @@
 import pandas as pd
+from collections import defaultdict
 from datetime import datetime, timedelta
 
-def load_schedule(csv_path):
-    df = pd.read_csv(csv_path)
-    df['Start Date'] = pd.to_datetime(df['Start Date'])
-    df['Due Date'] = pd.to_datetime(df['Due Date'])
+
+REQUIRED_COLUMNS = ['Task Name', 'Start Date', 'Due Date', 'Assignee', 'Linked Entity']
+
+def load_schedule(csv_file):
+    df = pd.read_csv(csv_file)
+
+    # Clean and normalize columns
+    df.columns = [col.strip() for col in df.columns]
+
+    # Ensure required columns exist
+    missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {', '.join(missing)}")
+
+    # Convert date columns to datetime
+    df['Start Date'] = pd.to_datetime(df['Start Date'], errors='coerce')
+    df['Due Date'] = pd.to_datetime(df['Due Date'], errors='coerce')
+
+    # Drop invalid rows
+    df = df.dropna(subset=['Start Date', 'Due Date'])
+
+    # Sort for readability
+    df = df.sort_values(by='Start Date').reset_index(drop=True)
+
     return df
 
-def get_weeks_range(start_datetime, end_datetime):
-    """Return all Monday-to-Sunday week tuples (datetime objects)"""
-    weeks = []
-    current = start_datetime
-    while current <= end_datetime:
-        week_start = current - timedelta(days=current.weekday())
+
+def get_weekly_task_groups(df, internship_start_date, exclude_weekends=True, leave_dates=[]):
+    if isinstance(internship_start_date, pd.Timestamp):
+        internship_start_date = internship_start_date.date()
+
+    # Set current to start of first full week
+    current = internship_start_date - timedelta(days=internship_start_date.weekday())
+
+    # Set end date to last due date as date
+    end = df['Due Date'].max().date()
+
+    weeks = {}
+
+    while current <= end:
+        week_start = current
         week_end = week_start + timedelta(days=6)
-        weeks.append((week_start, week_end))
+
+        # Use .dt.date to make compatible comparisons
+        mask = (df['Start Date'].dt.date <= week_end) & (df['Due Date'].dt.date >= week_start)
+        week_df = df[mask]
+
+        tasks = defaultdict(list)
+        for _, row in week_df.iterrows():
+            start = max(row['Start Date'].date(), week_start)
+            end = min(row['Due Date'].date(), week_end)
+            for i in range((end - start).days + 1):
+                day = start + timedelta(days=i)
+                if (exclude_weekends and day.weekday() >= 5):
+                    continue
+                if day in leave_dates:
+                    continue
+                task_text = f"{row['Task Name']} ({row['Linked Entity']})" if pd.notna(row['Linked Entity']) else row['Task Name']
+                tasks[day].append(task_text)
+
+        label = f"{week_start.strftime('%Y-%m-%d')} to {week_end.strftime('%Y-%m-%d')}"
+        full_week = {week_start + timedelta(days=i): tasks.get(week_start + timedelta(days=i), []) for i in range(5)}
+        weeks[label] = full_week
+
         current += timedelta(days=7)
+
     return weeks
 
-def get_tasks_for_week(df, week_start):
-    """Return a dictionary of daily tasks for a given week"""
-    week_end = week_start + timedelta(days=6)
-
-    mask = (df['Start Date'] <= week_end) & (df['Due Date'] >= week_start)
-    week_tasks = df[mask]
-
-    daily_tasks = {}
-    for _, row in week_tasks.iterrows():
-        start = max(row['Start Date'], week_start)
-        end = min(row['Due Date'], week_end)
-
-        for n in range((end - start).days + 1):
-            day = (start + timedelta(days=n)).date()  # Use .date() as key
-            entry = f"{row['Task Name']} ({row['Linked Entity']})" if pd.notna(row['Linked Entity']) else row['Task Name']
-            if day not in daily_tasks:
-                daily_tasks[day] = []
-            daily_tasks[day].append(entry)
-
-    return daily_tasks

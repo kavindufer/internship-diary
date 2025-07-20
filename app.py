@@ -1,63 +1,73 @@
 import streamlit as st
+import pandas as pd
 from datetime import datetime, timedelta
-import os
+from utils.csv_parser import load_schedule, get_weekly_task_groups
 
-from utils.csv_parser import load_schedule, get_weeks_range, get_tasks_for_week
-from utils.docx_handler import load_template, fill_weekly_report, save_report
+st.set_page_config(page_title="Internship Diary Automator", layout="centered")
 
-# ---- Constants ----
-TEMPLATE_PATH = "templates/report_template.docx"
-OUTPUT_DIR = "output"
+st.title("📅 Internship Diary Automator")
+st.write("Start by uploading your task schedule to generate weekly reports.")
 
-# ---- Streamlit Setup ----
-st.set_page_config(page_title="Intern Weekly Report Generator", layout="centered")
-st.title("📅 Intern Weekly Report Generator")
+# --- Upload CSV ---
+csv_file = st.file_uploader("📄 Upload Task Schedule CSV", type=["csv"])
 
-# ---- Sidebar Upload ----
-st.sidebar.header("Upload Task Schedule")
-csv_file = st.sidebar.file_uploader("📄 Upload your CSV file", type=["csv"])
-
-# ---- Main App Logic ----
 if csv_file:
-    # Load CSV and get week ranges
-    df = load_schedule(csv_file)
-    min_date, max_date = df["Start Date"].min().date(), df["Due Date"].max().date()
-    week_ranges = get_weeks_range(min_date, max_date)
+    try:
+        df = load_schedule(csv_file)
+        st.success("✅ CSV successfully parsed!")
 
-    # Week selector
-    st.subheader("📆 Select a Week to Generate Report")
-    week_options = [f"{start} to {end}" for start, end in week_ranges]
-    selected_week_str = st.selectbox("Choose Week:", week_options)
-    week_start = datetime.strptime(selected_week_str.split(" to ")[0], "%Y-%m-%d")
+        st.subheader("🔍 Task Preview")
+        st.dataframe(df.head(10), use_container_width=True)
+        st.info(f"📅 Earliest Task: {df['Start Date'].min().date()} — Latest Task: {df['Due Date'].max().date()}")
 
-    # Show weekly tasks
-    st.subheader("🗂️ Tasks This Week")
-    daily_tasks = get_tasks_for_week(df, week_start)
+        # === Weekly Grouping ===
+        st.subheader("📆 Weekly Grouping")
 
-    for i in range(7):
-        day = week_start + timedelta(days=i)
-        task_list = daily_tasks.get(day, ["No task"])
-        st.markdown(f"**{day.strftime('%A')} ({day}):**")
-        for task in task_list:
-            st.write(f"- {task}")
+        default_start = df['Start Date'].min().date()
+        start_date_input = st.date_input("When did your internship start?", value=default_start)
 
-    # Generate report
-    if st.button("📤 Generate Weekly Report"):
-        doc = load_template(TEMPLATE_PATH)
-        filled_doc = fill_weekly_report(doc, week_start, daily_tasks)
+        leave_dates = []
+        st.subheader("🛌 Leaves Taken")
+        num_leaves = st.number_input("How many leave days did you take?", min_value=0, step=1)
+        leave_data = {}
 
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        output_path = os.path.join(OUTPUT_DIR, f"Weekly_Report_{week_start}.docx")
-        save_report(filled_doc, output_path)
+        for i in range(num_leaves):
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                leave_day = st.date_input(f"Leave {i + 1} - Date", key=f"leave_date_{i}")
+            with col2:
+                leave_reason = st.text_input(f"Leave {i + 1} - Reason", key=f"leave_reason_{i}")
+            if leave_day:
+                leave_dates.append(leave_day)
+                leave_data[leave_day] = leave_reason
 
-        with open(output_path, "rb") as f:
-            st.success("✅ Report generated successfully!")
-            st.download_button(
-                label="⬇️ Download Weekly Report",
-                data=f,
-                file_name=os.path.basename(output_path),
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+        if start_date_input:
+            weekly_tasks = get_weekly_task_groups(df, start_date_input, exclude_weekends=True, leave_dates=leave_dates)
+            week_labels = list(weekly_tasks.keys())
+            selected_week = st.selectbox("Select a week to view tasks", week_labels)
 
+            if selected_week:
+                tasks = weekly_tasks[selected_week]
+                st.markdown(f"### 📋 Tasks for {selected_week}")
+
+                # Create full week (Mon–Fri)
+                week_start = datetime.strptime(selected_week.split(" to ")[0], "%Y-%m-%d").date()
+                for i in range(5):  # Weekdays only
+                    day = week_start + timedelta(days=i)
+                    st.markdown(f"**{day.strftime('%A')} ({day.strftime('%Y-%m-%d')}):**")
+
+                    if day in leave_dates:
+                        reason = leave_data.get(day, "No reason provided")
+                        st.warning(f"🛌 Leave taken — {reason}")
+                        if not tasks.get(day):
+                            st.info("_No tasks on this day (on leave)_")
+                    elif day not in tasks:
+                        st.write("_No tasks_")
+                    else:
+                        for task in tasks[day]:
+                            st.write(f"- {task}")
+
+    except Exception as e:
+        st.error(f"❌ Failed to parse CSV: {e}")
 else:
-    st.info("📂 Please upload a CSV file to begin.")
+    st.warning("📂 Please upload a CSV file to proceed.")
