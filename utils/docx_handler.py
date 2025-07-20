@@ -1,28 +1,59 @@
 from docx import Document
-from datetime import timedelta
+from docx.shared import Inches
+from docx.oxml.ns import qn
 
-def load_template(template_path):
-    return Document(template_path)
+def fill_report_template(
+    template_path,
+    output_path,
+    week_ending,
+    training_mode,
+    daily_entries,
+    details_notes,
+    designation,
+    signature_path=None  # path to PNG
+):
+    doc = Document(template_path)
 
-def fill_weekly_report(doc, week_start, tasks_by_day):
-    week_end = week_start + timedelta(days=6)
+    # --- Fill Table 0 (Main Diary Table)
+    diary_table = doc.tables[0]
+    # [0,0]: week ending
+    orig_text = diary_table.cell(0,0).text
+    if "\n" in orig_text:
+        prefix = orig_text.split("\n")[0]
+    else:
+        prefix = orig_text
+    diary_table.cell(0,0).text = f"{prefix}\nSunday: {week_ending}"
 
-    # --- Table 1: Daily breakdown ---
-    main_table = doc.tables[0]
+    # [0,3]: training mode
+    diary_table.cell(0,3).text = f"TRAINING MODE\n{training_mode}"
 
-    # Fill header row with week ending date
-    main_table.cell(0, 1).text = f"FOR THE WEEK ENDING\nSunday: {week_end.strftime('%Y-%m-%d')}"
+    days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
+    for i, day in enumerate(days):
+        row = diary_table.rows[i+2]
+        # [i+2, 1]: date
+        row.cells[1].text = daily_entries.get(day, {}).get("date", "")
+        # [i+2, 2]: description
+        row.cells[2].text = daily_entries.get(day, {}).get("desc", "")
 
-    # Fill daily entries (rows 2–8)
-    for i in range(7):
-        day = week_start + timedelta(days=i)
-        day_date = day.date()
-        task_text = "\n".join(tasks_by_day.get(day_date, [])) or "No task"
+    # --- Fill Table 1 (Summary, Signature Table)
+    details_table = doc.tables[1]
+    # [1,0]: weekly summary/details
+    details_table.cell(1,0).text = details_notes
 
-        main_table.cell(i + 2, 1).text = day_date.strftime('%Y-%m-%d')
-        main_table.cell(i + 2, 2).text = task_text
+    # [2,2]: signature image (optional)
+    if signature_path:
+        # Clear any existing text
+        details_table.cell(2,2).text = ""
+        # Insert image
+        paragraph = details_table.cell(2,2).paragraphs[0]
+        run = paragraph.add_run()
+        run.add_picture(signature_path, width=Inches(1.2))
 
-    return doc
+    # [5,0]: week-ending date (sunday)
+    details_table.cell(5,0).text = f"DATE: {week_ending}"
 
-def save_report(doc, output_path):
+    # [5,1]: designation
+    details_table.cell(5,1).text = f"DESIGNATION AND SIGNATURE\n{designation}"
+    # Optionally also add signature image here if required
+
     doc.save(output_path)
