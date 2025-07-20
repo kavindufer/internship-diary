@@ -16,11 +16,9 @@ def fill_report_template(
 
     # --- Table 0 ---
     diary_table = doc.tables[0]
-    # Week ending
     orig_text = diary_table.cell(0,0).text
     prefix = orig_text.split("\n")[0] if "\n" in orig_text else orig_text
     diary_table.cell(0,0).text = f"{prefix}\nSunday: {week_ending}"
-    # Training mode
     diary_table.cell(0,3).text = f"TRAINING MODE\n{training_mode}"
 
     days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]

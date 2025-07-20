@@ -50,27 +50,38 @@ def get_notes_summary(all_entries, api_key):
     )
     return response.choices[0].message.content.strip()
 
-def get_daywise_partials(task_name, refined_text, all_days, api_key):
+def get_daywise_partials(descs, all_days, api_key):
     """
-    Given a refined task description and list of dates (strings, e.g., '2025-02-05'), 
-    return a dict of {date: text} where each text is only about that day’s progress.
+    descs: list of dicts [{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "description": "..."}]
+    all_days: list of date strings ("YYYY-MM-DD")
+    Returns {date: daywise_text}
     """
     client = openai.OpenAI(api_key=api_key)
     daywise_partials = {}
+    N = len(all_days)
     for i, day in enumerate(all_days):
+        desc_for_day = None
+        for desc in descs:
+            if desc["start"] <= day <= desc["end"]:
+                desc_for_day = desc["description"]
+                break
         prompt = (
-            f"This task spans {len(all_days)} days: {all_days}. "
-            f"For day {i+1} ({day}), write only the specific progress and activities for that day, "
-            "using the provided full description. Do not repeat prior or future days, do not duplicate content. "
-            "Be concise and factual. Here's the full description:\n"
-            f"{refined_text}\n\n"
-            "Today's entry:"
+            f"You are writing an internship work diary for a multi-day task. "
+            f"The overall task description is:\n'''{desc_for_day}'''\n"
+            f"This task spans {N} days: {all_days}. "
+            f"Today is day {i+1} of {N} ({day}). "
+            "Write only what would logically be accomplished on this particular day, "
+            "breaking down the task description into plausible progress for this day. "
+            "Do NOT repeat content from other days, and do NOT include the date in your answer. "
+            "Do NOT start with 'Summary for', 'On', or any date. "
+            "Be brief but specific—imagine you are spreading the workload evenly or logically across the days."
         )
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "system", "content": prompt}],
-            max_tokens=200,
-            temperature=0,
+            max_tokens=180,
+            temperature=0.2,
         )
         daywise_partials[day] = response.choices[0].message.content.strip()
     return daywise_partials
+
