@@ -37,11 +37,11 @@ def get_weekly_task_groups(df, internship_start_date, exclude_weekends=True, lea
     current = internship_start_date - timedelta(days=internship_start_date.weekday())
 
     # Set end date to last due date as date
-    end = df['Due Date'].max().date()
+    overall_end = df['Due Date'].max().date()
 
     weeks = {}
 
-    while current <= end:
+    while current <= overall_end:
         week_start = current
         week_end = week_start + timedelta(days=6)
 
@@ -52,8 +52,8 @@ def get_weekly_task_groups(df, internship_start_date, exclude_weekends=True, lea
         tasks = defaultdict(list)
         for _, row in week_df.iterrows():
             start = max(row['Start Date'].date(), week_start)
-            end = min(row['Due Date'].date(), week_end)
-            for i in range((end - start).days + 1):
+            task_end = min(row['Due Date'].date(), week_end)
+            for i in range((task_end - start).days + 1):
                 day = start + timedelta(days=i)
                 if (exclude_weekends and day.weekday() >= 5):
                     continue
