@@ -27,14 +27,24 @@ def load_schedule(csv_file):
 
     return df
 
+def get_weekly_task_groups(df, grouping_anchor=None, exclude_weekends=True, leave_dates=[]):
+    """
+    Groups tasks by week, starting from the earliest Monday on or before grouping_anchor,
+    to the last Sunday after the latest due date. All weeks in range will be present, even if no tasks.
+    """
+    # -- New: grouping_anchor, so weeks always start from earliest of user-input or csv
+    if grouping_anchor is None:
+        grouping_anchor = df['Start Date'].min().date()
+    elif isinstance(grouping_anchor, pd.Timestamp):
+        grouping_anchor = grouping_anchor.date()
 
-def get_weekly_task_groups(df, internship_start_date, exclude_weekends=True, leave_dates=[]):
-    if isinstance(internship_start_date, pd.Timestamp):
-        internship_start_date = internship_start_date.date()
+    # Compute calendar range
+    first_monday = grouping_anchor - timedelta(days=grouping_anchor.weekday())
+    last_due_date = df["Due Date"].max().date()
+    last_sunday = last_due_date + timedelta(days=(6 - last_due_date.weekday()))
 
-    # Start at beginning of the week
-    current = internship_start_date - timedelta(days=internship_start_date.weekday())
-    end = df['Due Date'].max().date()
+    current = first_monday
+    end = last_sunday
 
     weeks = {}
 
@@ -58,14 +68,10 @@ def get_weekly_task_groups(df, internship_start_date, exclude_weekends=True, lea
                 task_text = f"{row['Task Name']} ({row['Linked Entity']})" if pd.notna(row['Linked Entity']) else row['Task Name']
                 tasks[day].append(task_text)
 
-        # Always include all weekdays for the week, even if no tasks
+        # Always include Mon–Fri, even if no tasks
         full_week = {}
         for i in range(5):
             day = week_start + timedelta(days=i)
-            if exclude_weekends and day.weekday() >= 5:
-                continue
-            if day in leave_dates:
-                continue
             full_week[day] = tasks.get(day, [])
 
         label = f"{week_start.strftime('%Y-%m-%d')} to {week_end.strftime('%Y-%m-%d')}"

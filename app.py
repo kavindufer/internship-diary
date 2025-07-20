@@ -8,7 +8,6 @@ st.set_page_config(page_title="Internship Diary Automator", layout="centered")
 st.title("📅 Internship Diary Automator")
 st.write("Start by uploading your task schedule to generate weekly reports.")
 
-# --- Upload CSV ---
 csv_file = st.file_uploader("📄 Upload Task Schedule CSV", type=["csv"])
 
 if csv_file:
@@ -20,15 +19,15 @@ if csv_file:
         st.dataframe(df.head(10), use_container_width=True)
         st.info(f"📅 Earliest Task: {df['Start Date'].min().date()} — Latest Task: {df['Due Date'].max().date()}")
 
-        # === Weekly Grouping ===
-        st.subheader("📆 Weekly Grouping")
+        # === Internship Start Date
+        st.subheader("📅 Internship Start Date")
+        csv_earliest_start = df['Start Date'].min().date()
+        start_date_input = st.date_input("When did your internship start?", value=csv_earliest_start)
 
-        default_start = df['Start Date'].min().date()
-        start_date_input = st.date_input("When did your internship start?", value=default_start)
-
-        leave_dates = []
+        # === Leave Input
         st.subheader("🛌 Leaves Taken")
         num_leaves = st.number_input("How many leave days did you take?", min_value=0, step=1)
+        leave_dates = []
         leave_data = {}
 
         for i in range(num_leaves):
@@ -41,9 +40,20 @@ if csv_file:
                 leave_dates.append(leave_day)
                 leave_data[leave_day] = leave_reason
 
-        if start_date_input:
-            weekly_tasks = get_weekly_task_groups(df, start_date_input, exclude_weekends=True, leave_dates=leave_dates)
-            week_labels = sorted(list(weekly_tasks.keys()))
+        # === Weekly Grouping
+        st.subheader("📆 Weekly Grouping")
+
+        # -- FIX: group weeks from earliest date (internship or task), not only by internship start
+        grouping_anchor = min(start_date_input, csv_earliest_start)
+        weekly_tasks = get_weekly_task_groups(
+            df,
+            grouping_anchor=grouping_anchor,
+            exclude_weekends=True,
+            leave_dates=leave_dates
+        )
+        week_labels = sorted(list(weekly_tasks.keys()))
+
+        if week_labels:
             selected_week = st.selectbox("Select a week to view tasks", week_labels)
 
             if selected_week:
@@ -60,11 +70,13 @@ if csv_file:
                         st.warning(f"🛌 Leave taken — {reason}")
                         if not tasks.get(day):
                             st.info("_No tasks on this day (on leave)_")
-                    elif day not in tasks or not tasks[day]:
+                    elif not tasks.get(day):
                         st.write("_No tasks_")
                     else:
                         for task in tasks[day]:
                             st.write(f"- {task}")
+        else:
+            st.warning("⚠️ No weeks found in your task data range.")
 
     except Exception as e:
         st.error(f"❌ Failed to parse CSV: {e}")
